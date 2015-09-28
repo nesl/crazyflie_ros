@@ -3,7 +3,7 @@
 #include "crazyflie_driver/UpdateParams.h"
 #include "std_srvs/Empty.h"
 #include "geometry_msgs/Twist.h"
-#include "sensor_msgs/Imu.h"
+#include "geometry_msgs/Vector3Stamped.h"
 #include "sensor_msgs/Temperature.h"
 #include "sensor_msgs/MagneticField.h"
 #include "std_msgs/Float32.h"
@@ -54,7 +54,7 @@ public:
     m_serviceEmergency = n.advertiseService(tf_prefix + "/emergency", &CrazyflieROS::emergency, this);
     m_serviceUpdateParams = n.advertiseService(tf_prefix + "/update_params", &CrazyflieROS::updateParams, this);
 
-    m_pubImu = n.advertise<sensor_msgs::Imu>(tf_prefix + "/imu", 10);
+    m_pubImu = n.advertise<geometry_msgs::Vector3Stamped>(tf_prefix + "/orientation", 10);
     m_pubTemp = n.advertise<sensor_msgs::Temperature>(tf_prefix + "/temperature", 10);
     m_pubMag = n.advertise<sensor_msgs::MagneticField>(tf_prefix + "/magnetic_field", 10);
     m_pubPressure = n.advertise<std_msgs::Float32>(tf_prefix + "/pressure", 10);
@@ -66,18 +66,15 @@ public:
 
 private:
   struct logImu {
-    float acc_x;
-    float acc_y;
-    float acc_z;
-    float gyro_x;
-    float gyro_y;
-    float gyro_z;
-  } __attribute__((packed));
-
-  struct log2 {
+    float stabilizer_roll;
+    float stabilizer_pitch;
+    float stabilizer_yaw;
     float mag_x;
     float mag_y;
     float mag_z;
+  } __attribute__((packed));
+
+  struct logMet {
     float baro_temp;
     float baro_pressure;
     float pm_vbat;
@@ -195,36 +192,33 @@ private:
     }
 
     std::unique_ptr<LogBlock<logImu> > logBlockImu;
-    std::unique_ptr<LogBlock<log2> > logBlock2;
+    std::unique_ptr<LogBlock<logMet> > logBlockMet;
     if (m_enableLogging) {
       ROS_INFO("Requesting Logging variables...");
       m_cf.requestLogToc();
 
-      std::function<void(logImu*)> cb = std::bind(&CrazyflieROS::onImuData, this, std::placeholders::_1);
+      std::function<void(logImu*)> cb_imu = std::bind(&CrazyflieROS::onImuData, this, std::placeholders::_1);
 
       logBlockImu.reset(new LogBlock<logImu>(
         &m_cf,{
-          {"acc", "x"},
-          {"acc", "y"},
-          {"acc", "z"},
-          {"gyro", "x"},
-          {"gyro", "y"},
-          {"gyro", "z"},
-        }, cb));
-      logBlockImu->start(1); // 10ms
-
-      std::function<void(log2*)> cb2 = std::bind(&CrazyflieROS::onLog2Data, this, std::placeholders::_1);
-
-      logBlock2.reset(new LogBlock<log2>(
-        &m_cf,{
+          {"stabilizer", "roll"},
+          {"stabilizer", "pitch"},
+          {"stabilizer", "yaw"},
           {"mag", "x"},
           {"mag", "y"},
           {"mag", "z"},
+        }, cb_imu));
+      logBlockImu->start(10); // 100ms
+
+      std::function<void(logMet*)> cb_met = std::bind(&CrazyflieROS::onMetData, this, std::placeholders::_1);
+
+      logBlockMet.reset(new LogBlock<logMet>(
+        &m_cf,{
           {"baro", "temp"},
           {"baro", "pressure"},
-          {"pm", "vbat"},
-        }, cb2));
-      logBlock2->start(10); // 100ms
+          {"pm",   "vbat"},
+        }, cb_met));
+      logBlockMet->start(100); // 1s
 
     }
 
@@ -252,57 +246,49 @@ private:
   }
 
   void onImuData(logImu* data) {
-    sensor_msgs::Imu msg;
-    msg.header.stamp = ros::Time::now();
-    msg.header.frame_id = m_tf_prefix + "/base_link";
-    msg.orientation_covariance[0] = -1;
-
-    // measured in deg/s; need to convert to rad/s
-    msg.angular_velocity.x = degToRad(data->gyro_x);
-    msg.angular_velocity.y = degToRad(data->gyro_y);
-    msg.angular_velocity.z = degToRad(data->gyro_z);
-
-    // measured in mG; need to convert to m/s^2
-    msg.linear_acceleration.x = data->acc_x * 9.81;
-    msg.linear_acceleration.y = data->acc_y * 9.81;
-    msg.linear_acceleration.z = data->acc_z * 9.81;
-
-    m_pubImu.publish(msg);
-  }
-
-  void onLog2Data(log2* data) {
-
+    
+    // Measured in degrees
     {
-      sensor_msgs::Temperature msg;
+      geometry_msgs::Vector3Stamped msg;   
       msg.header.stamp = ros::Time::now();
       msg.header.frame_id = m_tf_prefix + "/base_link";
-      // measured in degC
-      msg.temperature = data->baro_temp;
-      m_pubTemp.publish(msg);
+      msg.vector.x = data->stabilizer_roll;
+      msg.vector.y = data->stabilizer_pitch;
+      msg.vector.z = data->stabilizer_yaw;
+      m_pubImu.publish(msg);
     }
 
+    // measured in Tesla
     {
       sensor_msgs::MagneticField msg;
-      msg.header.stamp = ros::Time::now();
-      msg.header.frame_id = m_tf_prefix + "/base_link";
-
-      // measured in Tesla
       msg.magnetic_field.x = data->mag_x;
       msg.magnetic_field.y = data->mag_y;
       msg.magnetic_field.z = data->mag_z;
       m_pubMag.publish(msg);
     }
+  }
 
+  void onMetData(logMet* data) {
+
+    // Measured in celcius
+    {
+      sensor_msgs::Temperature msg;
+      msg.header.stamp = ros::Time::now();
+      msg.header.frame_id = m_tf_prefix + "/base_link";
+      msg.temperature = data->baro_temp;  // Celcius
+      m_pubTemp.publish(msg);
+    }
+
+    // hPa (=mbar)
     {
       std_msgs::Float32 msg;
-      // hPa (=mbar)
       msg.data = data->baro_pressure;
       m_pubPressure.publish(msg);
     }
 
+    // Volts
     {
       std_msgs::Float32 msg;
-      // V
       msg.data = data->pm_vbat;
       m_pubBattery.publish(msg);
     }
