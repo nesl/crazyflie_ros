@@ -1,4 +1,5 @@
 #include "ros/ros.h"
+#include "crazyflie_driver/Orientation.h"
 #include "crazyflie_driver/AddCrazyflie.h"
 #include "crazyflie_driver/UpdateParams.h"
 #include "std_srvs/Empty.h"
@@ -54,9 +55,8 @@ public:
     m_serviceEmergency = n.advertiseService(tf_prefix + "/emergency", &CrazyflieROS::emergency, this);
     m_serviceUpdateParams = n.advertiseService(tf_prefix + "/update_params", &CrazyflieROS::updateParams, this);
 
-    m_pubImu = n.advertise<geometry_msgs::Vector3Stamped>(tf_prefix + "/orientation", 10);
+    m_pubImu = n.advertise<crazyflie_driver::Orientation>(tf_prefix + "/orientation", 10);
     m_pubTemp = n.advertise<sensor_msgs::Temperature>(tf_prefix + "/temperature", 10);
-    m_pubMag = n.advertise<sensor_msgs::MagneticField>(tf_prefix + "/magnetic_field", 10);
     m_pubPressure = n.advertise<std_msgs::Float32>(tf_prefix + "/pressure", 10);
     m_pubBattery = n.advertise<std_msgs::Float32>(tf_prefix + "/battery", 10);
 
@@ -69,6 +69,7 @@ private:
     float stabilizer_roll;
     float stabilizer_pitch;
     float stabilizer_yaw;
+    uint16_t stabilizer_thrust;
     float mag_x;
     float mag_y;
     float mag_z;
@@ -204,6 +205,7 @@ private:
           {"stabilizer", "roll"},
           {"stabilizer", "pitch"},
           {"stabilizer", "yaw"},
+          {"stabilizer", "thrust"},
           {"mag", "x"},
           {"mag", "y"},
           {"mag", "z"},
@@ -249,22 +251,17 @@ private:
     
     // Measured in degrees
     {
-      geometry_msgs::Vector3Stamped msg;   
+      crazyflie_driver::Orientation msg;   
       msg.header.stamp = ros::Time::now();
       msg.header.frame_id = m_tf_prefix + "/base_link";
-      msg.vector.x = data->stabilizer_roll;
-      msg.vector.y = data->stabilizer_pitch;
-      msg.vector.z = data->stabilizer_yaw;
+      msg.roll = data->stabilizer_roll;
+      msg.pitch = data->stabilizer_pitch;
+      msg.yaw = data->stabilizer_yaw;
+      msg.thrust = data->stabilizer_thrust;
+      msg.magnetic.x = data->mag_x;
+      msg.magnetic.y = data->mag_y;
+      msg.magnetic.z = data->mag_z;
       m_pubImu.publish(msg);
-    }
-
-    // measured in Tesla
-    {
-      sensor_msgs::MagneticField msg;
-      msg.magnetic_field.x = data->mag_x;
-      msg.magnetic_field.y = data->mag_y;
-      msg.magnetic_field.z = data->mag_z;
-      m_pubMag.publish(msg);
     }
   }
 

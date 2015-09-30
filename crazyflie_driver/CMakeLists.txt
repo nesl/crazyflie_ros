@@ -4,7 +4,7 @@ project(crazyflie_driver)
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
-find_package(catkin REQUIRED COMPONENTS message_generation std_msgs tf)
+find_package(catkin REQUIRED COMPONENTS message_generation std_msgs geometry_msgs tf)
 find_library(USB_LIB usb-1.0)
 
 # clang + libc++ cause linker errors; however we can use gcc-4.9 (or above instead)
@@ -47,11 +47,10 @@ SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
 ##   * add every package in MSG_DEP_SET to generate_messages(DEPENDENCIES ...)
 
 ## Generate messages in the 'msg' folder
-# add_message_files(
-#   FILES
-#   Message1.msg
-#   Message2.msg
-# )
+add_message_files(
+  FILES
+    Orientation.msg
+)
 
 ## Generate services in the 'srv' folder
 add_service_files(
@@ -71,6 +70,7 @@ add_service_files(
 generate_messages(
   DEPENDENCIES
    std_msgs
+   geometry_msgs
 )
 
 ###################################
@@ -88,6 +88,7 @@ catkin_package(
   CATKIN_DEPENDS
     message_runtime
     std_msgs
+    geometry_msgs
     tf
 #  DEPENDS system_lib
 )
