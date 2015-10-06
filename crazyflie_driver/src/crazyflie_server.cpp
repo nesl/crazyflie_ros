@@ -70,9 +70,6 @@ private:
     float stabilizer_pitch;
     float stabilizer_yaw;
     uint16_t stabilizer_thrust;
-    float mag_x;
-    float mag_y;
-    float mag_z;
   } __attribute__((packed));
 
   struct logMet {
@@ -206,9 +203,6 @@ private:
           {"stabilizer", "pitch"},
           {"stabilizer", "yaw"},
           {"stabilizer", "thrust"},
-          {"mag", "x"},
-          {"mag", "y"},
-          {"mag", "z"},
         }, cb_imu));
       logBlockImu->start(10); // 100ms
 
@@ -248,7 +242,6 @@ private:
   }
 
   void onImuData(logImu* data) {
-    
     // Measured in degrees
     {
       crazyflie_driver::Orientation msg;   
@@ -258,9 +251,6 @@ private:
       msg.pitch = data->stabilizer_pitch;
       msg.yaw = data->stabilizer_yaw;
       msg.thrust = data->stabilizer_thrust;
-      msg.magnetic.x = data->mag_x;
-      msg.magnetic.y = data->mag_y;
-      msg.magnetic.z = data->mag_z;
       m_pubImu.publish(msg);
     }
   }
