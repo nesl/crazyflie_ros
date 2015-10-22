@@ -118,6 +118,7 @@ class Controller:
                         targetDrone.pose.orientation.z,
                         targetDrone.pose.orientation.w)
                     euler = tf.transformations.euler_from_quaternion(quaternion)
+                    rospy.loginfo("Drone Z_err: %.2f", targetDrone.pose.position.z)
 
                     msg = Twist()
                     msg.linear.x = self.pidX.update(0.0, targetDrone.pose.position.x)

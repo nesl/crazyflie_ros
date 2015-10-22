@@ -62,6 +62,11 @@ public:
 
     std::thread t(&CrazyflieROS::run, this);
     t.detach();
+
+    // initialize vbat to 3.8 (no scaling)
+    rx_vbat = 3.8;
+    // initialize thrust to 0
+    rx_thrust = 0;
   }
 
 private:
@@ -85,7 +90,6 @@ private:
   {
     ROS_FATAL("Emergency requested!");
     m_isEmergency = true;
-
     return true;
   }
 
@@ -94,6 +98,18 @@ private:
       U value;
       ros::param::get(ros_param, value);
       m_cf.setParam<T>(id, (T)value);
+  }
+
+  float scaleThrustByBattery(float vbat){
+    float vnom = 4.0;
+
+    if( rx_thrust < 35000 ){
+      vnom = 3.8;
+    }else{
+      vnom = 3.5;
+    }
+    float discharge = vbat/vnom;
+    return (1/discharge);
   }
 
   bool updateParams(
@@ -150,6 +166,11 @@ private:
       float yawrate = msg->angular.z;
       uint16_t thrust = std::min<uint16_t>(std::max<float>(msg->linear.z, 0.0), 60000);
 
+      // normalize thrust based on battery level
+      float batScalar = scaleThrustByBattery(rx_vbat);
+      thrust *= batScalar;
+
+      ROS_INFO("new CF set point: t:%d (%.2f), p:%.2f, r:%.2f, yr:%.3f\n", thrust, batScalar, pitch, roll, yawrate);
       m_cf.sendSetpoint(roll, pitch, yawrate, thrust);
       m_sentSetpoint = true;
     }
@@ -251,6 +272,7 @@ private:
       msg.pitch = data->stabilizer_pitch;
       msg.yaw = data->stabilizer_yaw;
       msg.thrust = data->stabilizer_thrust;
+      rx_thrust = msg.thrust;
       m_pubImu.publish(msg);
     }
   }
@@ -277,6 +299,7 @@ private:
     {
       std_msgs::Float32 msg;
       msg.data = data->pm_vbat;
+      rx_vbat = data->pm_vbat;
       m_pubBattery.publish(msg);
     }
   }
@@ -299,6 +322,9 @@ private:
   ros::Publisher m_pubBattery;
 
   bool m_sentSetpoint;
+
+  float rx_vbat;
+  float rx_thrust;
 };
 
 bool add_crazyflie(

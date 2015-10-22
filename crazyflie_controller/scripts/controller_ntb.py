@@ -9,26 +9,39 @@ from std_msgs.msg import Empty, Float32
 from geometry_msgs.msg import Twist, PoseStamped, Pose
 import std_srvs.srv
 from pid import PID
+from pid import yawPID
 
 class Controller:
     Idle = 0
     Automatic = 1
     TakingOff = 2
     Landing = 3
+    CONTROLLER_PERIOD = 0.100
+    THRUST_HOVER = 42000
+    THRUST_MIN = 37000
+    THRUST_MAX = 46000
 
     def __init__(self, frame):
         self.frame = frame
         self.pubNav = rospy.Publisher('quadrotor/cmd_vel', Twist, queue_size=1)
         self.listener = TransformListener()
-        self.pidX = PID(10, 0, 0.0, -10, 10, "x")
-        self.pidY = PID(-10, -0, -0.0, -10, 10, "y")
-        self.pidZ = PID(1000, 200.0, 100.0, 10000, 50000, "z")
-        self.pidYaw = PID(-0.0, 0.0, 0.0, -200.0, 200.0, "yaw")
+        # PID = default, P, I, D, MIN, MAX, name
+        self.pidX   = PID(0, 6, 0.25, 0, -10, 10, "x")
+        self.pidY   = PID(0, -6, -0.25, -0, -10, 10, "y")
+        self.pidYaw = yawPID(0, +0.25, 0.01, 0.01, -20.0, 20.0, "yaw")
+        # asymPID = default, P+, P-, I+, I-, D, MIN, MAX, name
+        #self.pidZ   = asymPID(self.THRUST_HOVER, 0, 0, 200, 50, 0, self.THRUST_MIN, self.THRUST_MAX, "z")
+        self.pidZ   = PID(self.THRUST_HOVER, 1500, 300, 3000, 35000, 45000, "z") # Ki was 500
+        self.pidZ.clampIntegral(-1000, 3000) # was 6000
+
         self.state = Controller.Idle
         self.goal = Pose()
         rospy.Subscriber("goal_cflie", Pose, self._poseChanged)
         rospy.Service("takeoff", std_srvs.srv.Empty, self._takeoff)
         rospy.Service("land", std_srvs.srv.Empty, self._land)
+        rospy.Service("terminate", std_srvs.srv.Empty, self._terminate)
+
+        self.thrust = 0
 
         # origin
         self.origin = []
@@ -63,13 +76,32 @@ class Controller:
         self.state = Controller.TakingOff
         return std_srvs.srv.EmptyResponse()
 
+    def _terminate(self, req):
+        rospy.loginfo("Terminating!")
+        self.state = Controller.Idle
+
+        # emergency landing
+        msg = Twist()
+        msg.linear.x = 0
+        msg.linear.y = 0
+        msg.linear.z = 0
+        msg.angular.z = 0
+        self.pubNav.publish(msg)
+
+        # reset PID
+        self.pidReset()
+        self.thrust = 0
+
+        return std_srvs.srv.EmptyResponse()
+
     def _land(self, req):
         rospy.loginfo("Landing requested!")
-        self.state = Controller.Landing
+        self.goal.position.z = 0.0
+
         return std_srvs.srv.EmptyResponse()
 
     def run(self):
-        thrust = 0
+        self.thrust = 0
         while not rospy.is_shutdown():
             now = rospy.Time.now()
 
@@ -81,40 +113,45 @@ class Controller:
 
             # handle taking off
             if self.state == Controller.TakingOff:
-                # set origin
+                # set origin                
                 if len(self.origin) == 0:
                     self.origin = position
 
-                if (thrust > 40000 and position[2] > 1.50) or thrust > 50000:
+                if self.thrust >= self.THRUST_HOVER :
                     self.pidReset()
-                    self.pidZ.integral = thrust / self.pidZ.ki
-                    self.goal.position.z = 1.70
+                    #self.pidZ.integral = thrust / self.pidZ.ki
+                    self.goal.position.z = 1.60
                     self.goal.position.x = self.origin[0]
                     self.goal.position.y = self.origin[1]
-                    self.goal.position
                     self.state = Controller.Automatic
-                    thrust = 0
+                    #thrust = 0
+                    rospy.loginfo("CF swithing to auto")
                 else:
-                    thrust += 100
+                    self.thrust += 2000
+                    if self.thrust > self.THRUST_HOVER:
+                        self.thrust = self.THRUST_HOVER
                     msg = Twist()
-                    msg.linear.z = thrust
+                    msg.linear.z = self.thrust
                     self.pubNav.publish(msg)
 
             if self.state == Controller.Landing:
-                self.goal.position.z = 0.05
-                if position[2] <= 0.1:
+                self.goal.position.z = 0.15
+                if position[2] <= 0.15:
                     self.state = Controller.Idle
                     msg = Twist()
                     self.pubNav.publish(msg)
 
             if self.state == Controller.Automatic or self.state == Controller.Landing:
                 # transform target world coordinates into local coordinates
+                # Transform( SOURCE, TARGET )
                 r = self.getTransform("/world", self.frame)
                 if r:
                     position, quaternion, t = r
+
+                    # target CF-frame pose
                     targetWorld = PoseStamped()
                     targetWorld.header.stamp = t
-                    targetWorld.header.frame_id = "world"
+                    targetWorld.header.frame_id = "/world"
                     targetWorld.pose = self.goal
 
                     targetDrone = self.listener.transformPose(self.frame, targetWorld)
@@ -125,19 +162,23 @@ class Controller:
                         targetDrone.pose.orientation.z,
                         targetDrone.pose.orientation.w)
                     euler = tf.transformations.euler_from_quaternion(quaternion)
+                    yaw = np.degrees(euler[2])
+                    print "roll: %.1f, pitch: %.1f, yaw: %.1f" % (np.degrees(euler[0]), np.degrees(euler[1]), np.degrees(euler[2]))
+                    #rospy.loginfo("Quad dz: %.2f, zp: %d, zi: %d, zd: %d", targetDrone.pose.position.z, self.pidZ.plast, self.pidZ.integral, self.pidZ.dlast)
 
                     msg = Twist()
+                    # PID update: (value, targetValue)
                     msg.linear.x = self.pidX.update(0.0, targetDrone.pose.position.x)
                     msg.linear.y = self.pidY.update(0.0, targetDrone.pose.position.y)
                     msg.linear.z = self.pidZ.update(0.0, targetDrone.pose.position.z)
-                    msg.angular.z = self.pidYaw.update(0.0, euler[2])
+                    msg.angular.z = self.pidYaw.update(90.0, -yaw)
                     self.pubNav.publish(msg)
 
             if self.state == Controller.Idle:
                 msg = Twist()
                 self.pubNav.publish(msg)
 
-            rospy.sleep(0.01)
+            rospy.sleep(self.CONTROLLER_PERIOD)
 
 if __name__ == '__main__':
 
